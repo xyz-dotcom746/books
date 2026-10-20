@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f5f2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="マンガ本棚">
+  <title>マンガ本棚</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+  <script>
+    // テーマのちらつき防止
+    try {
+      var t = (JSON.parse(localStorage.getItem('manga-viewer-settings') || '{}').theme) || 'system';
+      var d = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = d ? 'dark' : 'light';
+    } catch (e) {}
+  </script>
+</head>
+<body>
+
+  <!-- 本棚 -->
+  <section id="library" class="view">
+    <header class="topbar">
+      <h1 class="topbar-title">マンガ本棚</h1>
+      <div class="topbar-actions">
+        <button class="btn primary" id="lib-add" type="button">＋ 追加</button>
+        <button class="icon-btn" id="lib-settings" type="button" aria-label="設定">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.2 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
+        </button>
+      </div>
+    </header>
+    <main class="content">
+      <div id="continue" class="continue" hidden></div>
+      <div class="toolbar">
+        <input id="lib-search" class="search" type="search" placeholder="作品名で検索" autocomplete="off">
+        <select id="lib-sort" class="select" aria-label="並び順">
+          <option value="recent">最近読んだ順</option>
+          <option value="title">タイトル順</option>
+        </select>
+      </div>
+      <div id="series-grid" class="grid"></div>
+      <div id="lib-empty" class="empty" hidden>
+        <p class="empty-title">本棚は空です</p>
+        <p>「＋ 追加」から漫画を取り込んでください。</p>
+        <ul class="empty-list">
+          <li>画像ファイル（JPG / PNG / WebP / GIF など）</li>
+          <li>ZIP / CBZ（フォルダごと圧縮したもの）</li>
+          <li>EPUB（画像中心の漫画 EPUB）</li>
+        </ul>
+        <p class="muted">おすすめ：「漫画A」フォルダ（中に「1巻」「2巻」…のフォルダ）をまとめて ZIP にして取り込むと、作品と巻が自動で整理されます。</p>
+      </div>
+    </main>
+  </section>
+
+  <!-- 作品（巻の一覧） -->
+  <section id="series" class="view" hidden>
+    <header class="topbar">
+      <button class="btn ghost" id="series-back" type="button">‹ 本棚</button>
+      <h1 class="topbar-title" id="series-title"></h1>
+      <div class="topbar-actions">
+        <button class="btn" id="series-add" type="button">＋ 巻を追加</button>
+        <button class="icon-btn" id="series-more" type="button" aria-label="その他">•••</button>
+      </div>
+    </header>
+    <main class="content">
+      <div class="series-head">
+        <button class="btn primary big" id="series-continue" type="button">続きから読む</button>
+        <label class="field">
+          <span>読む方向</span>
+          <select id="series-dir" class="select">
+            <option value="default">全体の設定に従う</option>
+            <option value="rtl">右開き（右→左）</option>
+            <option value="ltr">左開き（左→右）</option>
+          </select>
+        </label>
+      </div>
+      <div id="volume-grid" class="grid"></div>
+    </main>
+  </section>
+
+  <!-- リーダー -->
+  <section id="reader" class="view" hidden>
+    <div id="stage"><div id="spread"></div></div>
+    <div id="page-num" hidden></div>
+    <div id="reader-ui">
+      <div class="r-bar r-top">
+        <button class="btn ghost" id="r-back" type="button">‹ 戻る</button>
+        <div class="r-title" id="r-title"></div>
+        <button class="btn" id="r-mode" type="button"></button>
+        <button class="btn" id="r-dir" type="button"></button>
+        <button class="btn" id="r-shift" type="button">見開きずらし</button>
+        <button class="icon-btn" id="r-settings" type="button" aria-label="設定">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.2 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
+        </button>
+      </div>
+      <div class="r-bar r-bottom">
+        <button class="btn" id="r-prevvol" type="button">前の巻</button>
+        <input type="range" id="r-slider" min="0" max="0" step="1" value="0" aria-label="ページ移動">
+        <span class="r-pos" id="r-pos"></span>
+        <button class="btn" id="r-nextvol" type="button">次の巻</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 設定 -->
+  <div id="settings" class="sheet-backdrop" hidden>
+    <div class="sheet settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <header class="sheet-head">
+        <h2 id="settings-title">設定</h2>
+        <button class="btn ghost" id="settings-close" type="button">閉じる</button>
+      </header>
+      <div class="sheet-body" id="settings-body"></div>
+    </div>
+  </div>
+
+  <!-- 汎用アクションシート -->
+  <div id="action-sheet" class="sheet-backdrop" hidden>
+    <div class="sheet action" role="dialog" aria-modal="true">
+      <div class="action-title" id="action-title"></div>
+      <div id="action-list"></div>
+      <button class="action-item cancel" id="action-cancel" type="button">キャンセル</button>
+    </div>
+  </div>
+
+  <!-- 取り込み中 -->
+  <div id="busy" class="busy" hidden>
+    <div class="busy-box">
+      <div class="busy-text" id="busy-text">取り込み中…</div>
+      <div class="progress"><div class="progress-bar" id="busy-bar"></div></div>
+      <div class="muted small">取り込み中は画面を閉じないでください</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <input type="file" id="file-input" multiple hidden>
+  <input type="file" id="folder-input" multiple webkitdirectory hidden>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
