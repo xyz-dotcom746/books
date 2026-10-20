@@ -1,6 +1,6 @@
 // オフラインでも起動できるようにアプリ本体をキャッシュする
-// ファイルを更新したら VERSION を上げる
-const VERSION = 'v2';
+// ファイルを更新したら VERSION を上げる（js/app.js の APP_VERSION も同じ値にする）
+const VERSION = 'v3';
 const CACHE = 'manga-viewer-' + VERSION;
 const ASSETS = [
   './',
@@ -21,8 +21,14 @@ const ASSETS = [
   'icons/icon-512.png',
 ];
 
+// 新しい版を入れるときはブラウザのキャッシュを通さず、必ずサーバーから取り直す
+// （GitHub Pages はファイルを10分ほどキャッシュさせるため、古いファイルが混ざるのを防ぐ）
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting()),
+  );
 });
 
 self.addEventListener('activate', (e) => {
@@ -33,7 +39,7 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// キャッシュを優先し、裏でネットワークから更新（次回起動時に反映）
+// キャッシュを優先して素早く起動する（更新は VERSION を上げたときに入れ替わる）
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
@@ -41,12 +47,12 @@ self.addEventListener('fetch', (e) => {
     caches.open(CACHE).then(async (cache) => {
       const key = req.mode === 'navigate' ? 'index.html' : req;
       const cached = await cache.match(key, { ignoreSearch: true });
-      const network = fetch(req).then((res) => {
-        if (res.ok) cache.put(key, res.clone());
-        return res;
-      }).catch(() => null);
-      if (cached) { e.waitUntil(network); return cached; }
-      return (await network) || new Response('オフラインです', { status: 503 });
+      if (cached) return cached;
+      try {
+        return await fetch(req);
+      } catch {
+        return new Response('オフラインです', { status: 503 });
+      }
     }),
   );
 });

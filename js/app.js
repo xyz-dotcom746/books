@@ -4,6 +4,10 @@ import { importFiles } from './importer.js';
 import { Reader } from './reader.js';
 import { naturalCompare, escapeHtml, formatBytes } from './util.js';
 
+// sw.js の VERSION と同じ値にする
+const APP_VERSION = 'v3';
+let updateReady = false;
+
 const $ = (id) => document.getElementById(id);
 const views = { library: $('library'), series: $('series'), reader: $('reader') };
 
@@ -90,6 +94,7 @@ async function route(force = false) {
     return;
   }
   if (reader.active) reader.close();
+  if (updateReady) { location.reload(); return; } // 読書中に届いた更新は本棚に戻ったときに反映
   if (a === 'series' && b) {
     showView('series');
     await renderSeries(decodeURIComponent(b));
@@ -377,6 +382,9 @@ async function openSettings() {
     <h3>データ</h3>
     <div class="row"><div class="row-label">使用容量<div class="row-note" id="storage-info">計算中…</div></div></div>
     <div class="row"><button type="button" class="btn danger" id="clear-all">すべてのデータを削除</button></div>
+    <h3>アプリ</h3>
+    <div class="row"><div class="row-label">バージョン<div class="row-note">${APP_VERSION}</div></div>
+      <div class="row-control"><button type="button" class="btn" id="force-update">最新版に更新</button></div></div>
     <h3>使い方</h3>
     <div class="help">
       <p><b>取り込み：</b>「＋ 追加」から画像・ZIP・CBZ・EPUB を選びます。「漫画A」フォルダの中に「1巻」「2巻」…のフォルダがある構成を ZIP にまとめて取り込むと、作品と巻が自動で整理されます。</p>
@@ -398,6 +406,7 @@ async function openSettings() {
   body.querySelectorAll('input[type=checkbox]').forEach((el) => {
     el.addEventListener('change', () => setSetting(el.dataset.key, el.checked));
   });
+  $('force-update').addEventListener('click', forceUpdate);
   $('clear-all').addEventListener('click', async () => {
     if (!confirm('取り込んだ漫画と読書記録をすべて削除します。よろしいですか？')) return;
     setBusy('削除中…', 0);
@@ -450,8 +459,38 @@ window.addEventListener('pagehide', () => reader.flushSave());
 window.addEventListener('hashchange', () => route());
 window.addEventListener('popstate', () => route());
 
+// ---------- アプリの更新 ----------
+
+// 保存しているアプリ本体を捨てて、サーバーから最新版を読み直す（漫画と読書記録は残る）
+async function forceUpdate() {
+  if (!confirm('アプリを最新版に更新します。取り込んだ漫画と読書記録は消えません。')) return;
+  setBusy('最新版を取得中…', 0.5);
+  try {
+    for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+  } catch { /* ignore */ }
+  try {
+    for (const k of await caches.keys()) await caches.delete(k);
+  } catch { /* ignore */ }
+  // ブラウザのキャッシュに残っている古いファイルも取り直しておく
+  const files = ['./', 'index.html', 'sw.js', 'css/style.css', 'manifest.webmanifest',
+    ...['app', 'db', 'epub', 'epubview', 'importer', 'reader', 'settings', 'util', 'zip'].map((n) => `js/${n}.js`)];
+  await Promise.all(files.map((u) => fetch(u, { cache: 'reload' }).catch(() => {})));
+  location.reload();
+}
+
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  // 新しい版に切り替わったら読み直す（読書中なら本棚に戻ったときに）
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || updateReady) return;
+    updateReady = true;
+    if (!reader.active) location.reload();
+    else toast('新しいバージョンがあります。本棚に戻ると更新されます', 4000);
+  });
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+    // ホーム画面のアプリは起動したままのことが多いので、画面に戻ったときにも更新を確認する
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  }).catch(() => {});
 }
 
 route(true);
