@@ -226,6 +226,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 #spread.two .slot.left img { object-position: right center; }
 #spread.two .slot.right img { object-position: left center; }
+#textview { position: absolute; inset: 0; overflow: hidden; visibility: hidden; background: var(--reader-bg); }
+.epub-frame {
+  position: absolute; top: 0; left: 0;
+  border: 0; margin: 0; padding: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+  background: transparent;
+}
+.loading { margin: auto; color: var(--muted); }
 .missing { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 
 .end-card {
@@ -330,7 +339,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 .action { padding: 8px; gap: 0; background: transparent; }
 .action-title { text-align: center; font-size: 13px; color: var(--muted); padding: 12px; background: var(--surface); border-radius: 14px 14px 0 0; }
-#action-list { background: var(--surface); border-radius: 0 0 14px 14px; overflow: hidden; }
+#action-list { background: var(--surface); border-radius: 0 0 14px 14px; overflow-y: auto; max-height: 60vh; -webkit-overflow-scrolling: touch; }
 .action-title[hidden] + #action-list { border-radius: 14px; }
 .action-item {
   display: block; width: 100%;

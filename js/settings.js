@@ -12,6 +12,7 @@ export const DEFAULTS = {
   swipe: true,            // スワイプでページ送り
   showPageNum: false,     // ページ番号を常に表示
   preload: 4,             // 先読みする見開き数
+  textSize: 'M',          // EPUB の文章の文字サイズ S | M | L | XL
   librarySort: 'recent',  // recent | title
 };
 

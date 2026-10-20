@@ -10,7 +10,7 @@ import { readZip } from './zip.js';
 import { readEpub } from './epub.js';
 import {
   extOf, baseName, dirName, stripExt, isImageName, mimeOf, isJunk,
-  naturalCompare, guessSeriesTitle, imageSize, makeThumb,
+  naturalCompare, guessSeriesTitle, imageSize, makeThumb, makeTitleThumb,
 } from './util.js';
 
 const BATCH = 16;
@@ -54,6 +54,7 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
         volumes.set('epub:' + path, {
           key: path, parent: dirName(path), name: stripExt(baseName(path)),
           pages: ep.pages, needsSort: false, direction: ep.direction,
+          epub: ep.textMode ? { file: f, ...ep } : null,
         });
       } else {
         skipped++;
@@ -63,7 +64,7 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
     }
   }
 
-  const list = [...volumes.values()].filter((v) => v.pages.length);
+  const list = [...volumes.values()].filter((v) => v.pages.length || v.epub);
   list.sort((a, b) => naturalCompare(a.key, b.key));
 
   // 2. 作品名・巻名を決める
@@ -88,7 +89,7 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
   }
 
   const todo = list.filter((v) => !v.skip);
-  const totalPages = todo.reduce((n, v) => n + v.pages.length, 0);
+  const totalPages = todo.reduce((n, v) => n + (v.epub ? 1 : v.pages.length), 0);
   let donePages = 0;
   let volCount = 0;
   const touchedSeries = new Set();
@@ -110,6 +111,24 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
     if (existing) await db.deletePages(vid);
 
     try {
+      if (v.epub) {
+        // 文章を含む EPUB はファイルごと保存し、読むときにページ割りする
+        const ep = v.epub;
+        onProgress({ text: `取り込み中… ${series.title} / ${v.name}`, done: donePages, total: totalPages });
+        await db.putPages(vid, [{ index: 0, blob: new Blob([ep.file], { type: 'application/epub+zip' }) }]);
+        let thumb = null;
+        if (ep.getCover) { try { thumb = await makeThumb(await ep.getCover()); } catch { /* 表紙なし */ } }
+        if (!thumb) thumb = await makeTitleThumb(v.name);
+        await db.put('volumes', {
+          id: vid, seriesId: series.id, title: v.name, kind: 'epub',
+          pageCount: ep.sectionSizes.length, sectionSizes: ep.sectionSizes,
+          dims: [], thumb, addedAt: existing ? existing.addedAt : Date.now(),
+        });
+        donePages++;
+        volCount++;
+        touchedSeries.add(series.id);
+        continue;
+      }
       const dims = [];
       let thumb = null;
       let batch = [];

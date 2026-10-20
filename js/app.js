@@ -106,6 +106,7 @@ function openVolume(vid, at = 'resume') {
 
 const reader = new Reader({
   toast,
+  showSheet,
   onExit: () => goBack('#/series/' + encodeURIComponent(reader.vol.seriesId)),
   onOpenSettings: () => openSettings(),
   onVolumeChange: (vid) => {
@@ -131,6 +132,7 @@ function nextToRead(vols, progMap) {
     if (nv) return { vol: nv, at: 'resume', label: `${nv.title} から読む` };
     return { vol: v, at: 'resume', label: `${v.title} を最初から読む（読了）` };
   }
+  if (v.kind === 'epub') return { vol: v, at: 'resume', label: `${v.title} の ${Math.round((p.percent || 0) * 100)}% から` };
   return { vol: v, at: 'resume', label: `${v.title} の ${p.page + 1}ページから` };
 }
 
@@ -227,8 +229,9 @@ async function renderSeries(id) {
     let status = '未読';
     let ratio = 0;
     if (p && p.finished) { status = '読了'; ratio = 1; }
+    else if (p && v.kind === 'epub') { ratio = p.percent || 0; status = `${Math.round(ratio * 100)}%`; }
     else if (p) { status = `${p.page + 1} / ${v.pageCount}`; ratio = (p.page + 1) / v.pageCount; }
-    else status = `${v.pageCount}ページ`;
+    else status = v.kind === 'epub' ? '未読' : `${v.pageCount}ページ`;
     if (p && p.completed && !p.finished) status += '（再読中）';
 
     const card = document.createElement('div');
@@ -369,6 +372,7 @@ async function openSettings() {
     <h3>操作</h3>
     ${row('タップでページ送り', seg('tapMode', [['right-next', '右で次へ'], ['left-next', '左で次へ'], ['follow', '読む方向に合わせる']]), '画面の中央をタップするとメニューを表示')}
     ${row('スワイプでページ送り', toggle('swipe'))}
+    ${row('文字サイズ', seg('textSize', [['S', '小'], ['M', '中'], ['L', '大'], ['XL', '特大']]), '文章を含む EPUB（小説など）の文字の大きさ')}
     ${row('先読み', seg('preload', [[2, '少なめ'], [4, '標準'], [8, '多め']]), '多いほどページ送りが速くなりますがメモリを使います')}
     <h3>データ</h3>
     <div class="row"><div class="row-label">使用容量<div class="row-note" id="storage-info">計算中…</div></div></div>
@@ -422,7 +426,8 @@ $('settings').addEventListener('click', (e) => { if (e.target.id === 'settings')
 
 onSettingsChange((key) => {
   if (!reader.active) return;
-  if (['pageMode', 'coverSingle', 'wideSingle', 'direction'].includes(key)) reader.relayout();
+  if (['pageMode', 'coverSingle', 'wideSingle', 'direction', 'textSize'].includes(key)) reader.relayout();
+  else if (key === 'theme' && reader.mode === 'text') reader.relayout();
   else reader.updateUI();
 });
 

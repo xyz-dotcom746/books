@@ -1,6 +1,6 @@
 // オフラインでも起動できるようにアプリ本体をキャッシュする
 // ファイルを更新したら VERSION を上げる
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = 'manga-viewer-' + VERSION;
 const ASSETS = [
   './',
@@ -9,6 +9,7 @@ const ASSETS = [
   'js/app.js',
   'js/db.js',
   'js/epub.js',
+  'js/epubview.js',
   'js/importer.js',
   'js/reader.js',
   'js/settings.js',

@@ -151,6 +151,30 @@ export function makeThumb(blob, width = 320) {
   });
 }
 
+// 表紙画像がない本のサムネイル（タイトルを描いた画像）
+export function makeTitleThumb(title, w = 320, h = 457) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.fillStyle = '#2b2b30';
+  g.fillRect(0, 0, w, h);
+  g.fillStyle = '#f97316';
+  g.fillRect(0, h - 18, w, 18);
+  g.fillStyle = '#f2f2f2';
+  g.font = 'bold 30px "Hiragino Mincho ProN", "Yu Mincho", serif';
+  g.textBaseline = 'top';
+  // 1文字ずつ幅を見て折り返す
+  const lines = [];
+  let line = '';
+  for (const ch of title) {
+    if (g.measureText(line + ch).width > w - 48) { lines.push(line); line = ''; }
+    line += ch;
+  }
+  if (line) lines.push(line);
+  lines.slice(0, 7).forEach((l, i) => g.fillText(l, 24, 40 + i * 42));
+  return new Promise((resolve) => c.toBlob((b) => resolve(b), 'image/jpeg', 0.85));
+}
+
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
