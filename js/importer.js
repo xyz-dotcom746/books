@@ -13,7 +13,47 @@ import {
   naturalCompare, guessSeriesTitle, imageSize, makeThumb, makeTitleThumb,
 } from './util.js';
 
-const BATCH = 16;
+// 何ページずつまとめて保存するか（保存の回数を減らすほど速い。メモリを使いすぎないよう容量でも区切る）
+const BATCH_PAGES = 64;
+const BATCH_BYTES = 32 * 1024 * 1024;
+// 同時に読み込むページ数
+const READ_AHEAD = 6;
+
+// 巻のページを読み込みながら保存する。読み込みと保存を並行して進める
+async function storePages(vid, pages, onPage) {
+  const dims = [];
+  let thumb = null;
+  const load = async (p) => {
+    let blob = await p.getBlob();
+    if (!blob.type) blob = new Blob([blob], { type: mimeOf(p.name) });
+    return { blob, size: await imageSize(blob) };
+  };
+  const quiet = (pr) => { pr.catch(() => {}); return pr; };
+  const queue = [];
+  let next = 0;
+  let writing = Promise.resolve();
+  let batch = [];
+  let bytes = 0;
+  const flush = async () => {
+    await writing;
+    writing = quiet(db.putPages(vid, batch));
+    batch = [];
+    bytes = 0;
+  };
+  for (let i = 0; i < pages.length; i++) {
+    while (next < pages.length && queue.length < READ_AHEAD) queue.push(quiet(load(pages[next++])));
+    const { blob, size } = await queue.shift();
+    dims.push([size.w, size.h]);
+    if (i === 0) thumb = await makeThumb(blob);
+    batch.push({ index: i, blob });
+    bytes += blob.size;
+    if (batch.length >= BATCH_PAGES || bytes >= BATCH_BYTES) await flush();
+    onPage(i);
+  }
+  if (batch.length) await flush();
+  await writing;
+  return { dims, thumb };
+}
 
 export async function importFiles(files, { targetSeriesId = null, onProgress = () => {}, askName } = {}) {
   const volumes = new Map();
@@ -35,7 +75,7 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
     const f = files[i];
     const path = (f.webkitRelativePath || f.name).replace(/\\/g, '/');
     if (isJunk(path)) continue;
-    onProgress({ text: `ファイルを確認中… ${f.name}`, done: i, total: files.length });
+    onProgress({ phase: 'scan', text: `ファイルを確認中… ${f.name}`, done: i, total: files.length, unit: 'ファイル' });
     const ext = extOf(path);
     try {
       if (isImageName(path)) {
@@ -108,14 +148,14 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
     }
     const existing = (await db.getAllByIndex('volumes', 'seriesId', series.id)).find((x) => x.title === v.name);
     const vid = existing ? existing.id : db.uid();
-    if (existing) await db.deletePages(vid);
 
     try {
       if (v.epub) {
         // 文章を含む EPUB はファイルごと保存し、読むときにページ割りする
         const ep = v.epub;
-        onProgress({ text: `取り込み中… ${series.title} / ${v.name}`, done: donePages, total: totalPages });
+        onProgress({ phase: 'save', text: `取り込み中…（${todo.indexOf(v) + 1}/${todo.length}冊目）${series.title} / ${v.name}`, done: donePages, total: totalPages, unit: 'ページ' });
         await db.putPages(vid, [{ index: 0, blob: new Blob([ep.file], { type: 'application/epub+zip' }) }]);
+        if (existing) await db.deletePages(vid, 1);
         let thumb = null;
         if (ep.getCover) { try { thumb = await makeThumb(await ep.getCover()); } catch { /* 表紙なし */ } }
         if (!thumb) thumb = await makeTitleThumb(v.name);
@@ -129,21 +169,12 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
         touchedSeries.add(series.id);
         continue;
       }
-      const dims = [];
-      let thumb = null;
-      let batch = [];
-      for (let i = 0; i < v.pages.length; i++) {
-        let blob = await v.pages[i].getBlob();
-        if (!blob.type) blob = new Blob([blob], { type: mimeOf(v.pages[i].name) });
-        const s = await imageSize(blob);
-        dims.push([s.w, s.h]);
-        if (i === 0) thumb = await makeThumb(blob);
-        batch.push({ index: i, blob });
-        if (batch.length >= BATCH) { await db.putPages(vid, batch); batch = []; }
+      // 取り込み直しのときは古いページを先に消さず上書きし、余ったページだけ消す
+      const { dims, thumb } = await storePages(vid, v.pages, (i) => {
         donePages++;
-        onProgress({ text: `取り込み中… ${series.title} / ${v.name}（${i + 1}/${v.pages.length}）`, done: donePages, total: totalPages });
-      }
-      if (batch.length) await db.putPages(vid, batch);
+        onProgress({ phase: 'save', text: `取り込み中…（${todo.indexOf(v) + 1}/${todo.length}冊目）${series.title} / ${v.name}`, done: donePages, total: totalPages, unit: 'ページ' });
+      });
+      if (existing) await db.deletePages(vid, v.pages.length);
       await db.put('volumes', {
         id: vid, seriesId: series.id, title: v.name, pageCount: v.pages.length,
         dims, thumb, addedAt: existing ? existing.addedAt : Date.now(),

@@ -87,42 +87,110 @@ export async function getPage(volumeId, index) {
   return wrap(db.transaction('pages').objectStore('pages').get([volumeId, index]));
 }
 
+// ページ画像の書き込み・削除はディスクへの書き出しを待たない設定にして速くする
+// （アプリが落ちても失われない。失われうるのは端末の電源が突然切れたときだけ）
+const RELAXED = { durability: 'relaxed' };
+
 // blobs: [{ index, blob }]
 export async function putPages(volumeId, items) {
   const db = await openDB();
-  const tx = db.transaction('pages', 'readwrite');
+  const tx = db.transaction('pages', 'readwrite', RELAXED);
   const os = tx.objectStore('pages');
   for (const { index, blob } of items) os.put(blob, [volumeId, index]);
   return done(tx);
 }
 
-export async function deletePages(volumeId) {
+// from 以降のページを消す（取り込み直しでページ数が減ったとき用）
+export async function deletePages(volumeId, from = 0) {
   const db = await openDB();
-  const tx = db.transaction('pages', 'readwrite');
-  tx.objectStore('pages').delete(IDBKeyRange.bound([volumeId, 0], [volumeId, Number.MAX_SAFE_INTEGER]));
+  const tx = db.transaction('pages', 'readwrite', RELAXED);
+  tx.objectStore('pages').delete(IDBKeyRange.bound([volumeId, from], [volumeId, Number.MAX_SAFE_INTEGER]));
   return done(tx);
 }
 
-export async function deleteVolume(volumeId) {
-  await deletePages(volumeId);
+// ---- 削除 ----
+// 本棚からはすぐ消し（作品・巻・読書位置の記録だけ消す）、
+// 容量の大きいページ画像は裏で少しずつ消す。途中でアプリを閉じても次回の起動時に続きを消す。
+
+const TRASH_KEY = 'manga-viewer-trash';
+const readTrash = () => { try { return JSON.parse(localStorage.getItem(TRASH_KEY) || '[]'); } catch { return []; } };
+const writeTrash = (ids) => { try { localStorage.setItem(TRASH_KEY, JSON.stringify(ids)); } catch { /* ignore */ } };
+let purging = null;
+let purgeListener = () => {};
+const PURGE_CHUNK = 50;
+
+// 進み具合を受け取る: { run, done, total }（ページ数）。終わったら null
+export function onPurgeProgress(fn) { purgeListener = fn; }
+
+async function pageIndices(volumeId) {
   const db = await openDB();
-  const tx = db.transaction(['volumes', 'progress'], 'readwrite');
-  tx.objectStore('volumes').delete(volumeId);
-  tx.objectStore('progress').delete(volumeId);
+  const range = IDBKeyRange.bound([volumeId, 0], [volumeId, Number.MAX_SAFE_INTEGER]);
+  const keys = await wrap(db.transaction('pages').objectStore('pages').getAllKeys(range));
+  return keys.map((k) => k[1]);
+}
+
+async function deleteRange(volumeId, from, to) {
+  const db = await openDB();
+  const tx = db.transaction('pages', 'readwrite', RELAXED);
+  tx.objectStore('pages').delete(IDBKeyRange.bound([volumeId, from], [volumeId, to]));
   return done(tx);
+}
+
+export function purgeTrash() {
+  if (!purging) {
+    purging = (async () => {
+      const run = Date.now();
+      const left = new Map(); // 巻ID → 残っているページ番号
+      const remaining = () => [...left.values()].reduce((n, a) => n + a.length, 0);
+      let removed = 0;
+      let ids;
+      while ((ids = readTrash()).length) {
+        for (const id of ids) if (!left.has(id)) left.set(id, await pageIndices(id).catch(() => []));
+        const id = ids[0];
+        const idx = left.get(id);
+        // 少しずつ別のトランザクションで消して、その間も他の本を読めるようにする
+        while (idx.length) {
+          purgeListener({ run, done: removed, total: removed + remaining() });
+          const part = idx.splice(0, PURGE_CHUNK);
+          await deleteRange(id, part[0], part[part.length - 1]).catch(() => {});
+          removed += part.length;
+        }
+        left.delete(id);
+        writeTrash(readTrash().filter((x) => x !== id));
+      }
+    })().finally(() => { purging = null; purgeListener(null); });
+  }
+  return purging;
+}
+
+export async function deleteVolumes(volumeIds, seriesId = null) {
+  writeTrash([...new Set([...readTrash(), ...volumeIds])]);
+  const db = await openDB();
+  const tx = db.transaction(['series', 'volumes', 'progress'], 'readwrite');
+  for (const id of volumeIds) {
+    tx.objectStore('volumes').delete(id);
+    tx.objectStore('progress').delete(id);
+  }
+  if (seriesId) tx.objectStore('series').delete(seriesId);
+  await done(tx);
+  purgeTrash();
+}
+
+export function deleteVolume(volumeId) {
+  return deleteVolumes([volumeId]);
 }
 
 export async function deleteSeries(seriesId) {
   const vols = await getAllByIndex('volumes', 'seriesId', seriesId);
-  for (const v of vols) await deleteVolume(v.id);
-  await del('series', seriesId);
+  return deleteVolumes(vols.map((v) => v.id), seriesId);
 }
 
 export async function clearAll() {
   const db = await openDB();
   const tx = db.transaction(['series', 'volumes', 'pages', 'progress'], 'readwrite');
   for (const s of ['series', 'volumes', 'pages', 'progress']) tx.objectStore(s).clear();
-  return done(tx);
+  await done(tx);
+  writeTrash([]);
 }
 
 export function uid() {

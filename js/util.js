@@ -54,11 +54,15 @@ export function guessSeriesTitle(volumeTitle) {
 
 // 画像のヘッダーから縦横サイズを取得（全体をデコードしないので高速）
 export async function imageSize(blob) {
-  try {
-    const dv = new DataView(await blob.slice(0, 512 * 1024).arrayBuffer());
-    const r = parseSize(dv);
-    if (r) return r;
-  } catch { /* fallthrough */ }
+  // ふつうは先頭の数KBに大きさが書かれているので、まず少しだけ読む
+  for (const n of [64 * 1024, 512 * 1024]) {
+    try {
+      const dv = new DataView(await blob.slice(0, n).arrayBuffer());
+      const r = parseSize(dv);
+      if (r) return r;
+      if (dv.byteLength < n) break;
+    } catch { break; }
+  }
   return decodeSize(blob);
 }
 

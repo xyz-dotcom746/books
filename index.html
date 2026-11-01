@@ -134,8 +134,15 @@
     <div class="busy-box">
       <div class="busy-text" id="busy-text">取り込み中…</div>
       <div class="progress"><div class="progress-bar" id="busy-bar"></div></div>
+      <div class="busy-meta"><span id="busy-count"></span><span id="busy-eta"></span></div>
       <div class="muted small">取り込み中は画面を閉じないでください</div>
     </div>
+  </div>
+
+  <!-- 裏で進める削除の進み具合 -->
+  <div id="bg-task" class="bg-task" hidden>
+    <div class="bg-task-text" id="bg-task-text">削除中…</div>
+    <div class="progress"><div class="progress-bar" id="bg-task-bar"></div></div>
   </div>
 
   <div id="toast" class="toast" hidden></div>

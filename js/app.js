@@ -5,7 +5,7 @@ import { Reader } from './reader.js';
 import { naturalCompare, escapeHtml, formatBytes } from './util.js';
 
 // sw.js の VERSION と同じ値にする
-const APP_VERSION = 'v4';
+const APP_VERSION = 'v6';
 let updateReady = false;
 
 const $ = (id) => document.getElementById(id);
@@ -43,13 +43,72 @@ function showSheet(title, actions) {
 $('action-cancel').addEventListener('click', () => { $('action-sheet').hidden = true; });
 $('action-sheet').addEventListener('click', (e) => { if (e.target.id === 'action-sheet') $('action-sheet').hidden = true; });
 
-function setBusy(text, ratio) {
-  $('busy').hidden = text == null;
-  if (text != null) {
-    $('busy-text').textContent = text;
-    $('busy-bar').style.width = `${Math.round((ratio || 0) * 100)}%`;
-  }
+// 残り時間の表示（「残り約1分20秒」など）
+function formatRest(sec) {
+  if (sec < 5) return 'まもなく完了';
+  if (sec < 60) return `残り約${Math.ceil(sec / 5) * 5}秒`;
+  if (sec >= 600) return `残り約${Math.round(sec / 60)}分`;
+  const t = Math.round(sec / 10) * 10;
+  const m = Math.floor(t / 60), s = t % 60;
+  return `残り約${m}分${s ? `${s}秒` : ''}`;
 }
+
+// 経過時間と進み具合から残り時間を見積もる。key が変わったら測り直す
+function etaTracker() {
+  let key = null, t0 = 0, est = null;
+  return (k, ratio) => {
+    const now = performance.now();
+    if (k !== key) { key = k; t0 = now; est = null; }
+    const elapsed = (now - t0) / 1000;
+    if (elapsed < 1.5 || ratio < 0.02) return '残り時間を計算中…';
+    const rest = elapsed * (1 - ratio) / ratio;
+    // 表示がふらつかないよう、前回の見積もりからの経過分を引いた値と平均する
+    est = est == null ? { rest, at: now } : { rest: (est.rest - (now - est.at) / 1000) * 0.7 + rest * 0.3, at: now };
+    return formatRest(Math.max(0, est.rest));
+  };
+}
+
+const busyEta = etaTracker();
+let busyMetaAt = 0;
+
+// info: { key, done, total, unit } を渡すと、何%・何件中何件・残り時間を表示する
+function setBusy(text, ratio, info = null) {
+  $('busy').hidden = text == null;
+  if (text == null) return;
+  $('busy-text').textContent = text;
+  $('busy-bar').style.width = `${Math.round((ratio || 0) * 100)}%`;
+  if (!info || !info.total) {
+    $('busy-count').textContent = '';
+    $('busy-eta').textContent = '';
+    return;
+  }
+  const eta = busyEta(info.key, ratio);
+  // 数字が細かく動きすぎないよう、0.3秒に1回だけ書き換える
+  const now = performance.now();
+  if (now - busyMetaAt < 300 && info.done < info.total) return;
+  busyMetaAt = now;
+  $('busy-count').textContent = `${Math.floor(ratio * 100)}%（${info.done} / ${info.total}${info.unit || ''}）`;
+  $('busy-eta').textContent = eta;
+}
+
+// 削除した漫画のページ画像を裏で消している間、画面下に進み具合を出す
+const purgeEta = etaTracker();
+let purgeShowTimer = null;
+db.onPurgeProgress((p) => {
+  if (!p) {
+    clearTimeout(purgeShowTimer);
+    purgeShowTimer = null;
+    $('bg-task').hidden = true;
+    return;
+  }
+  const r = p.total ? p.done / p.total : 0;
+  $('bg-task-text').textContent = `削除したデータを消去中… ${Math.floor(r * 100)}%　${purgeEta(p.run, r)}`;
+  $('bg-task-bar').style.width = `${Math.round(r * 100)}%`;
+  // すぐ終わるときは出さない
+  if ($('bg-task').hidden && !purgeShowTimer) {
+    purgeShowTimer = setTimeout(() => { $('bg-task').hidden = false; }, 400);
+  }
+});
 
 const thumbUrls = new Map();
 function thumbUrl(vol) {
@@ -269,10 +328,10 @@ function volumeMenu(v, p) {
     } },
     { label: 'この巻を削除', danger: true, fn: async () => {
       if (!confirm(`「${v.title}」を削除しますか？`)) return;
-      await db.deleteVolume(v.id);
+      const rest = (await db.getAllByIndex('volumes', 'seriesId', v.seriesId)).filter((x) => x.id !== v.id);
+      await db.deleteVolumes([v.id], rest.length ? null : v.seriesId);
       dropThumb(v.id);
-      const rest = await db.getAllByIndex('volumes', 'seriesId', v.seriesId);
-      if (!rest.length) { await db.del('series', v.seriesId); location.replace('#/'); }
+      if (!rest.length) location.replace('#/');
       else renderSeries(v.seriesId);
     } },
   ]);
@@ -299,9 +358,7 @@ $('series-more').addEventListener('click', () => {
     { label: 'この作品を削除', danger: true, fn: async () => {
       if (!confirm(`「${s.title}」のすべての巻を削除しますか？`)) return;
       const vols = await db.getAllByIndex('volumes', 'seriesId', s.id);
-      setBusy('削除中…', 0);
-      await db.deleteSeries(s.id);
-      setBusy(null);
+      await db.deleteVolumes(vols.map((v) => v.id), s.id);
       vols.forEach((v) => dropThumb(v.id));
       location.replace('#/');
     } },
@@ -325,10 +382,11 @@ async function runImport(fileList) {
   if (!files.length) return;
   navigator.storage?.persist?.().catch(() => {});
   setBusy('準備中…', 0);
+  const run = Date.now();
   try {
     const r = await importFiles(files, {
       targetSeriesId: importTarget,
-      onProgress: ({ text, done, total }) => setBusy(text, total ? done / total : 0),
+      onProgress: ({ text, done, total, phase, unit }) => setBusy(text, total ? done / total : 0, { key: run + phase, done, total, unit }),
       askName: async (msg, def) => { setBusy(null); const v = prompt(msg, def); setBusy('取り込み中…', 0); return v; },
     });
     setBusy(null);
@@ -496,6 +554,9 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 }
 
 route(true);
+
+// 前回消しきれなかったページ画像を、起動が落ち着いてから消す
+setTimeout(() => db.purgeTrash(), 3000);
 
 // デバッグ・テスト用
 window.__manga = { importFiles, db, reader, route };
