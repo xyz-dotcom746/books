@@ -18,20 +18,54 @@ const EXTRA_TYPES = {
   woff: 'font/woff', woff2: 'font/woff2', mp3: 'audio/mpeg', mp4: 'video/mp4',
 };
 
+// ノッチ・ステータスバー・ホームバーの領域（ホーム画面から全画面で開いたとき）
+let probe = null;
+function safeInsets() {
+  if (!probe) {
+    probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;'
+      + 'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+    document.body.appendChild(probe);
+  }
+  const cs = getComputedStyle(probe);
+  const n = (v) => parseFloat(v) || 0;
+  return { top: n(cs.paddingTop), right: n(cs.paddingRight), bottom: n(cs.paddingBottom), left: n(cs.paddingLeft) };
+}
+
 export class EpubView {
   constructor(host) {
     this.host = host;
+    // 余白の内側だけを表示する枠。ページはこの枠の中で位置をずらして切り替える
+    this.clip = document.createElement('div');
+    this.clip.className = 'epub-clip';
+    host.appendChild(this.clip);
+    this.W = 0;
+    this.H = 0;
     this.frames = new Map(); // 章番号 -> { iframe, pages, kind, vertical, ready }
     this.res = new Map();    // パス -> Promise<blob URL>
     this.docs = new Map();   // 章番号 -> Promise<{ kind, url, fixed }>
     this.cur = null;
     this.page = 0;
-    this.opts = { double: false, dark: false, fontSize: 18 };
+    this.opts = { double: false, dark: false, fontSize: 18, marginV: 28, marginH: 28 };
+  }
+
+  // 余白（＋安全領域）を反映して表示枠の大きさを決める
+  fitClip() {
+    const safe = safeInsets();
+    const { marginV, marginH } = this.opts;
+    const c = this.clip.style;
+    c.top = safe.top + marginV + 'px';
+    c.bottom = safe.bottom + marginV + 'px';
+    c.left = safe.left + marginH + 'px';
+    c.right = safe.right + marginH + 'px';
+    this.W = Math.max(100, this.clip.clientWidth);
+    this.H = Math.max(100, this.clip.clientHeight);
   }
 
   // 1冊ごとに新しいインスタンスを使う（閉じた後に届いた非同期処理は無視する）
   async open(blob, opts) {
-    this.opts = { ...opts };
+    this.opts = { ...this.opts, ...opts };
+    this.fitClip();
     const pkg = await openPackage(await readZip(blob));
     if (this.closed) return;
     this.pkg = pkg;
@@ -47,6 +81,7 @@ export class EpubView {
 
   close() {
     this.closed = true;
+    this.clip.remove();
     for (const f of this.frames.values()) f.iframe.remove();
     this.frames.clear();
     for (const p of this.res.values()) p.then((u) => u && URL.revokeObjectURL(u));
@@ -194,9 +229,9 @@ export class EpubView {
     iframe.setAttribute('aria-hidden', 'true');
     iframe.tabIndex = -1;
     iframe.style.visibility = 'hidden';
-    iframe.style.width = this.host.clientWidth + 'px';
-    iframe.style.height = this.host.clientHeight + 'px';
-    this.host.appendChild(iframe);
+    iframe.style.width = this.W + 'px';
+    iframe.style.height = this.H + 'px';
+    this.clip.appendChild(iframe);
     f = { section: i, iframe, pages: 1, kind: 'flow', vertical: false, loaded: false };
     f.ready = (async () => {
       const b = await this.build(i);
@@ -217,7 +252,9 @@ export class EpubView {
   }
 
   paginate(f) {
-    const W = this.host.clientWidth, H = this.host.clientHeight;
+    this.fitClip();
+    const W = this.W, H = this.H;
+    f.step = 0;
     const s = f.iframe.style;
     s.transform = '';
     s.width = W + 'px';
@@ -258,36 +295,38 @@ export class EpubView {
     const wm = win.getComputedStyle(doc.body || html).writingMode + ' ' + win.getComputedStyle(html).writingMode;
     f.vertical = /vertical|tb-rl|tb-lr/.test(wm); // horizontal-tb は横書き
 
-    const gap = Math.round(Math.max(32, Math.min(W, H) * 0.07));
-    const pad = Math.round(gap * 0.8);
+    // 余白は表示枠（clip）の外側で取るので、文書自体には余白を付けない。
+    // 1ページ = 表示枠ちょうどの大きさの段。段の間隔（gap）は枠の外に隠れる。
+    const html0 = 'max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;border:0!important;box-sizing:border-box!important;column-width:auto!important;column-fill:auto!important;overflow:visible!important';
     let css;
     if (!f.vertical) {
-      // 横書き：横方向に段を並べる（2ページ表示なら1画面に2段）
+      // 横書き：横方向に段を並べる（2ページ表示なら1画面に2段、段の間は左右の余白の2倍）
       const n = double && W >= 700 ? 2 : 1;
-      const colW = W / n - gap, colH = H - pad * 2;
-      css = `html{width:${W}px!important;height:${H}px!important;max-width:none!important;max-height:none!important;margin:0!important;padding:${pad}px ${gap / 2}px!important;box-sizing:border-box!important;column-count:${n}!important;column-width:auto!important;column-gap:${gap}px!important;column-fill:auto!important;overflow:visible!important}`
-        + `img,svg,video{max-width:${colW}px!important;max-height:${colH}px!important;object-fit:contain}img{height:auto}`;
+      const G = Math.max(24, Math.round(this.opts.marginH * 2));
+      const colW = (W - (n - 1) * G) / n;
+      css = `html{width:${W}px!important;height:${H}px!important;${html0};column-count:${n}!important;column-gap:${G}px!important}`
+        + `img,svg,video{max-width:${colW}px!important;max-height:${H}px!important;object-fit:contain}img{height:auto}`;
+      f.step = W + G;
     } else {
       // 縦書き：段は下方向に並ぶ
-      const colW = W - pad * 2, colH = H - gap;
-      css = `html{writing-mode:vertical-rl!important;-webkit-writing-mode:vertical-rl!important;width:${W}px!important;height:${H}px!important;max-width:none!important;max-height:none!important;margin:0!important;padding:${gap / 2}px ${pad}px!important;box-sizing:border-box!important;column-count:1!important;column-width:auto!important;column-gap:${gap}px!important;column-fill:auto!important;overflow:visible!important}`
-        + `img,svg,video{max-width:${colW}px!important;max-height:${colH}px!important;object-fit:contain}img{width:auto}`;
+      const G = 40;
+      css = `html{writing-mode:vertical-rl!important;-webkit-writing-mode:vertical-rl!important;width:${W}px!important;height:${H}px!important;${html0};column-count:1!important;column-gap:${G}px!important}`
+        + `img,svg,video{max-width:${W}px!important;max-height:${H}px!important;object-fit:contain}img{width:auto}`;
+      f.step = H + G;
     }
     st.textContent += css;
 
-    if (!f.vertical) {
-      f.pages = Math.max(1, Math.round(html.scrollWidth / W));
-      s.width = f.pages * W + 'px';
-    } else {
-      f.pages = Math.max(1, Math.round(html.scrollHeight / H));
-      s.height = f.pages * H + 'px';
-    }
+    // 最後の段の終わりまでの長さからページ数を求める
+    const size = f.vertical ? html.scrollHeight : html.scrollWidth;
+    f.pages = Math.max(1, Math.ceil((size - 2) / f.step));
+    const total = (f.pages - 1) * f.step + (f.vertical ? H : W);
+    if (f.vertical) s.height = total + 'px'; else s.width = total + 'px';
   }
 
   place(f, page) {
     if (f.kind !== 'flow') return;
-    const W = this.host.clientWidth, H = this.host.clientHeight;
-    f.iframe.style.transform = f.vertical ? `translateY(${-page * H}px)` : `translateX(${-page * W}px)`;
+    const d = -page * f.step;
+    f.iframe.style.transform = f.vertical ? `translateY(${d}px)` : `translateX(${d}px)`;
   }
 
   // ---------- 移動 ----------
@@ -328,7 +367,8 @@ export class EpubView {
   }
 
   async relayout(opts) {
-    this.opts = { ...opts };
+    this.opts = { ...this.opts, ...opts };
+    this.fitClip();
     if (!this.cur) return;
     const frac = this.page / this.cur.pages;
     for (const f of this.frames.values()) if (f.loaded) this.paginate(f);

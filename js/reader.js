@@ -9,6 +9,8 @@ import { naturalCompare, escapeHtml } from './util.js';
 import { EpubView } from './epubview.js';
 
 const TEXT_SIZES = { S: 15, M: 18, L: 21, XL: 25 };
+// 余白（px）。ステータスバーなどの領域はこれとは別に自動で確保する
+const TEXT_MARGINS = { S: 12, M: 28, L: 48, XL: 72 };
 
 const MAX_ZOOM = 4;
 
@@ -125,6 +127,8 @@ export class Reader {
       double: this.isDouble(),
       dark: document.documentElement.dataset.theme === 'dark',
       fontSize: TEXT_SIZES[settings.textSize] || TEXT_SIZES.M,
+      marginV: TEXT_MARGINS[settings.textMarginV] ?? TEXT_MARGINS.M,
+      marginH: TEXT_MARGINS[settings.textMarginH] ?? TEXT_MARGINS.M,
     };
   }
 

@@ -13,6 +13,8 @@ export const DEFAULTS = {
   showPageNum: false,     // ページ番号を常に表示
   preload: 4,             // 先読みする見開き数
   textSize: 'M',          // EPUB の文章の文字サイズ S | M | L | XL
+  textMarginV: 'M',       // EPUB の上下の余白 S | M | L | XL
+  textMarginH: 'M',       // EPUB の左右の余白 S | M | L | XL
   librarySort: 'recent',  // recent | title
 };
 

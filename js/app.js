@@ -5,7 +5,7 @@ import { Reader } from './reader.js';
 import { naturalCompare, escapeHtml, formatBytes } from './util.js';
 
 // sw.js の VERSION と同じ値にする
-const APP_VERSION = 'v3';
+const APP_VERSION = 'v4';
 let updateReady = false;
 
 const $ = (id) => document.getElementById(id);
@@ -378,6 +378,8 @@ async function openSettings() {
     ${row('タップでページ送り', seg('tapMode', [['right-next', '右で次へ'], ['left-next', '左で次へ'], ['follow', '読む方向に合わせる']]), '画面の中央をタップするとメニューを表示')}
     ${row('スワイプでページ送り', toggle('swipe'))}
     ${row('文字サイズ', seg('textSize', [['S', '小'], ['M', '中'], ['L', '大'], ['XL', '特大']]), '文章を含む EPUB（小説など）の文字の大きさ')}
+    ${row('余白（上下）', seg('textMarginV', [['S', '狭い'], ['M', '標準'], ['L', '広い'], ['XL', 'とても広い']]), 'EPUB の文章の上下の余白（時計などの表示部分は自動で避けます）')}
+    ${row('余白（左右）', seg('textMarginH', [['S', '狭い'], ['M', '標準'], ['L', '広い'], ['XL', 'とても広い']]), 'EPUB の文章の左右の余白')}
     ${row('先読み', seg('preload', [[2, '少なめ'], [4, '標準'], [8, '多め']]), '多いほどページ送りが速くなりますがメモリを使います')}
     <h3>データ</h3>
     <div class="row"><div class="row-label">使用容量<div class="row-note" id="storage-info">計算中…</div></div></div>
@@ -435,7 +437,7 @@ $('settings').addEventListener('click', (e) => { if (e.target.id === 'settings')
 
 onSettingsChange((key) => {
   if (!reader.active) return;
-  if (['pageMode', 'coverSingle', 'wideSingle', 'direction', 'textSize'].includes(key)) reader.relayout();
+  if (['pageMode', 'coverSingle', 'wideSingle', 'direction', 'textSize', 'textMarginV', 'textMarginH'].includes(key)) reader.relayout();
   else if (key === 'theme' && reader.mode === 'text') reader.relayout();
   else reader.updateUI();
 });

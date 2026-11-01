@@ -227,6 +227,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #spread.two .slot.left img { object-position: right center; }
 #spread.two .slot.right img { object-position: left center; }
 #textview { position: absolute; inset: 0; overflow: hidden; visibility: hidden; background: var(--reader-bg); }
+.epub-clip { position: absolute; inset: 0; overflow: hidden; }
 .epub-frame {
   position: absolute; top: 0; left: 0;
   border: 0; margin: 0; padding: 0;
