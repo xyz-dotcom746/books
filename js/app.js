@@ -5,7 +5,7 @@ import { Reader } from './reader.js';
 import { naturalCompare, escapeHtml, formatBytes } from './util.js';
 
 // sw.js の VERSION と同じ値にする
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 let updateReady = false;
 
 const $ = (id) => document.getElementById(id);
@@ -390,7 +390,9 @@ async function runImport(fileList) {
       askName: async (msg, def) => { setBusy(null); const v = prompt(msg, def); setBusy('取り込み中…', 0); return v; },
     });
     setBusy(null);
-    if (r.volumes) toast(`${r.series}作品・${r.volumes}冊（${r.pages}ページ）を取り込みました`, 3500);
+    const skipNote = r.already ? `（取り込み済みの${r.already}冊は飛ばしました）` : '';
+    if (r.volumes) toast(`${r.series}作品・${r.volumes}冊（${r.pages}ページ）を取り込みました${skipNote}`, 4000);
+    else if (r.already) toast(`${r.already}冊はすべて取り込み済みでした`, 3500);
     else if (!r.errors.length) toast('取り込める画像が見つかりませんでした', 3500);
     if (r.errors.length) alert('一部のファイルを取り込めませんでした:\n\n' + r.errors.slice(0, 15).join('\n'));
   } catch (e) {

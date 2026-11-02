@@ -1,6 +1,6 @@
 // オフラインでも起動できるようにアプリ本体をキャッシュする
 // ファイルを更新したら VERSION を上げる（js/app.js の APP_VERSION も同じ値にする）
-const VERSION = 'v6';
+const VERSION = 'v7';
 const CACHE = 'manga-viewer-' + VERSION;
 const ASSETS = [
   './',

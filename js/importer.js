@@ -55,19 +55,37 @@ async function storePages(vid, pages, onPage) {
   return { dims, thumb };
 }
 
+// 巻の中身の目印（ページ数とファイルサイズの並びから作る）。中身を読まずに作れるので速い
+function fingerprint(sizes) {
+  let h = 0x811c9dc5;
+  for (const ch of sizes.join(',')) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193);
+  return `img:${sizes.length}:${sizes.reduce((a, b) => a + b, 0)}:${(h >>> 0).toString(36)}`;
+}
+
 export async function importFiles(files, { targetSeriesId = null, onProgress = () => {}, askName } = {}) {
   const volumes = new Map();
   const errors = [];
   let skipped = 0;
+  let already = 0;
 
-  const addImage = (path, getBlob) => {
+  // 取り込み済みの巻を見分けるために、今ある作品と巻を先に読んでおく
+  const allSeries = await db.getAll('series');
+  const allVolumes = await db.getAll('volumes');
+  const target = targetSeriesId ? allSeries.find((s) => s.id === targetSeriesId) : null;
+  const findExisting = (seriesTitle, name) => {
+    const s = target || allSeries.find((x) => x.title === seriesTitle);
+    return s ? allVolumes.find((x) => x.seriesId === s.id && x.title === name) : null;
+  };
+  const seriesTitleFor = (parent, name) => (target ? target.title : parent ? baseName(parent) : guessSeriesTitle(name));
+
+  const addImage = (path, getBlob, size) => {
     const d = dirName(path);
     let v = volumes.get(d);
     if (!v) {
       v = { key: d, parent: dirName(d), name: baseName(d), pages: [], needsSort: true, direction: null };
       volumes.set(d, v);
     }
-    v.pages.push({ name: path, getBlob });
+    v.pages.push({ name: path, getBlob, size });
   };
 
   // 1. ファイルを走査して巻の候補を作る
@@ -79,7 +97,7 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
     const ext = extOf(path);
     try {
       if (isImageName(path)) {
-        addImage(path, () => (f.type ? f : new Blob([f], { type: mimeOf(path) })));
+        addImage(path, () => (f.type ? f : new Blob([f], { type: mimeOf(path) })), f.size);
       } else if (ext === 'zip' || ext === 'cbz') {
         const entries = (await readZip(f)).filter((e) => !isJunk(e.name));
         const imgs = entries.filter((e) => isImageName(e.name));
@@ -88,11 +106,15 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
         const singleFolder = tops.size === 1 && [...tops][0].endsWith('/');
         const parent = dirName(path);
         const prefix = (parent ? parent + '/' : '') + (singleFolder ? '' : stripExt(baseName(path)) + '/');
-        for (const e of imgs) addImage(prefix + e.name, () => e.getBlob(mimeOf(e.name)));
+        for (const e of imgs) addImage(prefix + e.name, () => e.getBlob(mimeOf(e.name)), e.size);
       } else if (ext === 'epub') {
+        const parent = dirName(path), name = stripExt(baseName(path));
+        const sig = `epub:${f.size}`;
+        // 同じファイルを取り込み済みなら中身を開かずに飛ばす
+        if (findExisting(seriesTitleFor(parent, name), name)?.sig === sig) { already++; continue; }
         const ep = await readEpub(f);
         volumes.set('epub:' + path, {
-          key: path, parent: dirName(path), name: stripExt(baseName(path)),
+          key: path, parent, name, sig,
           pages: ep.pages, needsSort: false, direction: ep.direction,
           epub: ep.textMode ? { file: f, ...ep } : null,
         });
@@ -108,9 +130,6 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
   list.sort((a, b) => naturalCompare(a.key, b.key));
 
   // 2. 作品名・巻名を決める
-  const allSeries = await db.getAll('series');
-  const target = targetSeriesId ? allSeries.find((s) => s.id === targetSeriesId) : null;
-
   for (const v of list) {
     if (!v.name) {
       // フォルダ情報のない画像（ファイルを直接選んだ場合）
@@ -124,8 +143,22 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
       v.name = n.trim() || '1巻';
     }
     if (target) v.seriesTitle = target.title;
-    else if (!v.seriesTitle) v.seriesTitle = v.parent ? baseName(v.parent) : guessSeriesTitle(v.name);
+    else if (!v.seriesTitle) v.seriesTitle = seriesTitleFor(v.parent, v.name);
     if (v.needsSort) v.pages.sort((a, b) => naturalCompare(a.name, b.name));
+    if (!v.sig) v.sig = fingerprint(v.pages.map((p) => p.size));
+
+    // 同じ作品・同じ巻名で中身も同じなら取り込み済みとして飛ばす（中身が違えば入れ替える）
+    const ex = findExisting(v.seriesTitle, v.name);
+    if (ex) {
+      const count = v.epub ? v.epub.sectionSizes.length : v.pages.length;
+      // 目印を記録する前に取り込んだ巻は、ページ数が同じなら同じとみなし、目印を記録しておく
+      const same = ex.sig ? ex.sig === v.sig : ex.pageCount === count;
+      if (same) {
+        if (!ex.sig) await db.put('volumes', { ...ex, sig: v.sig });
+        v.skip = true;
+        already++;
+      }
+    }
   }
 
   const todo = list.filter((v) => !v.skip);
@@ -162,7 +195,7 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
         await db.put('volumes', {
           id: vid, seriesId: series.id, title: v.name, kind: 'epub',
           pageCount: ep.sectionSizes.length, sectionSizes: ep.sectionSizes,
-          dims: [], thumb, addedAt: existing ? existing.addedAt : Date.now(),
+          dims: [], thumb, sig: v.sig, addedAt: existing ? existing.addedAt : Date.now(),
         });
         donePages++;
         volCount++;
@@ -177,7 +210,7 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
       if (existing) await db.deletePages(vid, v.pages.length);
       await db.put('volumes', {
         id: vid, seriesId: series.id, title: v.name, pageCount: v.pages.length,
-        dims, thumb, addedAt: existing ? existing.addedAt : Date.now(),
+        dims, thumb, sig: v.sig, addedAt: existing ? existing.addedAt : Date.now(),
       });
       volCount++;
       touchedSeries.add(series.id);
@@ -194,5 +227,5 @@ export async function importFiles(files, { targetSeriesId = null, onProgress = (
     await db.put('series', s);
   }
 
-  return { volumes: volCount, series: touchedSeries.size, pages: donePages, errors, skipped };
+  return { volumes: volCount, series: touchedSeries.size, pages: donePages, errors, skipped, already };
 }
